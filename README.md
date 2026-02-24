@@ -136,13 +136,14 @@ raco test tests/visible/
 racket tests/visible/test_differentiator.rkt
 ```
 
+**Note:** Testing is local-only. There is no automatic feedback on push — you must run tests yourself before submitting. Hidden tests will run after the deadline to verify your trigonometric implementations.
+
 ## Project Structure
 
 ```
 .
 ├── .github/
 │   └── workflows/
-│       ├── autograding.yml      # Runs tests on push
 │       └── generate-variant.yml # Generates student variant
 ├── src/
 │   └── differentiator.rkt       # Your implementation
