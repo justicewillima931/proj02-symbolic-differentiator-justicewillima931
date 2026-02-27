@@ -37,32 +37,36 @@ jobs:
       run: |
         sudo snap install racket --classic
 
+    - name: Extract student ID from repo name
+      id: extract_id
+      run: |
+        if [ -n "${{ inputs.student_id }}" ]; then
+          STUDENT_ID="${{ inputs.student_id }}"
+        else
+          REPO_NAME="${{ github.repository }}"
+          REPO_NAME="${REPO_NAME#*/}"
+          ASSIGNMENT_SLUG="proj02-symbolic-differentiator"
+          STUDENT_ID="${REPO_NAME#${ASSIGNMENT_SLUG}-}"
+        fi
+        echo "student_id=$STUDENT_ID" >> $GITHUB_OUTPUT
+        echo "Extracted student ID: $STUDENT_ID"
+
     - name: Check if variant already exists
       id: check_variant
       run: |
         if [ -f ".variant_config.json" ]; then
-          echo "exists=true" >> $GITHUB_OUTPUT
-          echo "Variant already exists, skipping generation"
+          EXISTING_ID=$(python3 -c "import json; print(json.load(open('.variant_config.json')).get('student_id', ''))" 2>/dev/null || echo "")
+          if [ "$EXISTING_ID" = "${{ steps.extract_id.outputs.student_id }}" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+            echo "Valid variant exists for $EXISTING_ID, skipping"
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+            echo "Stale variant (was '$EXISTING_ID', need '${{ steps.extract_id.outputs.student_id }}'). Regenerating."
+          fi
         else
           echo "exists=false" >> $GITHUB_OUTPUT
           echo "No variant found, will generate"
         fi
-
-    - name: Extract student ID from repo name
-      if: steps.check_variant.outputs.exists == 'false'
-      id: extract_id
-      run: |
-        # Get student ID from workflow input or extract from repo name
-        if [ -n "${{ inputs.student_id }}" ]; then
-          STUDENT_ID="${{ inputs.student_id }}"
-        else
-          # Repository name format: assignment-name-studentusername
-          REPO_NAME="${{ github.repository }}"
-          # Extract the last part after the last hyphen (student username)
-          STUDENT_ID=$(echo "$REPO_NAME" | rev | cut -d'-' -f1 | rev)
-        fi
-        echo "student_id=$STUDENT_ID" >> $GITHUB_OUTPUT
-        echo "Extracted student ID: $STUDENT_ID"
 
     - name: Generate variant configuration
       if: steps.check_variant.outputs.exists == 'false'
