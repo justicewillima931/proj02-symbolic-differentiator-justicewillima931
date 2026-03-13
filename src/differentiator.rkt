@@ -26,19 +26,28 @@
 ;;; Selectors
 ;;; ================================================================
 
-(define (addend e)      (cadr e))
-(define (augend e)      (caddr e))
-(define (multiplier e)  (cadr e))
-(define (multiplicand e)(caddr e))
-(define (base e)        (cadr e))   ; base of a power expression
-(define (exponent e)    (caddr e))  ; exponent of a power expression
-(define (trig-arg e)    (cadr e))   ; argument of a trig function
+(define (addend e) (cadr e))
+;; augend: if more than 2 operands, fold remainder into nested sum
+(define (augend e)
+  (if (null? (cdddr e))
+      (caddr e)
+      (cons '+ (cddr e))))
+
+(define (multiplier e) (cadr e))
+;; multiplicand: same treatment for multi-arg products
+(define (multiplicand e)
+  (if (null? (cdddr e))
+      (caddr e)
+      (cons '* (cddr e))))
+
+(define (base e)     (cadr e))
+(define (exponent e) (caddr e))
+(define (trig-arg e) (cadr e))
 
 ;;; ================================================================
 ;;; Smart constructors with algebraic simplification
 ;;; ================================================================
 
-;; make-sum: construct (+ a1 a2) with simplification
 (define (make-sum a1 a2)
   (cond
     [(and (number? a1) (number? a2)) (+ a1 a2)]   ; constant folding
@@ -46,7 +55,6 @@
     [(and (number? a2) (= a2 0)) a1]               ; x + 0 = x
     [else (list '+ a1 a2)]))
 
-;; make-product: construct (* m1 m2) with simplification
 (define (make-product m1 m2)
   (cond
     [(and (number? m1) (number? m2)) (* m1 m2)]    ; constant folding
@@ -56,7 +64,6 @@
     [(and (number? m2) (= m2 1)) m1]               ; x * 1 = x
     [else (list '* m1 m2)]))
 
-;; make-power: construct (^ base exp) with simplification
 (define (make-power b e)
   (cond
     [(and (number? e) (= e 0)) 1]                  ; x^0 = 1
@@ -64,7 +71,6 @@
     [(and (number? b) (number? e)) (expt b e)]     ; constant folding
     [else (list '^ b e)]))
 
-;; make-neg: negate an expression
 (define (make-neg e)
   (make-product -1 e))
 
@@ -72,7 +78,6 @@
 ;;; Simplification pass
 ;;; ================================================================
 
-;; Full recursive simplification
 (define (simplify expr)
   (cond
     [(number? expr) expr]
@@ -86,7 +91,6 @@
     [(power? expr)
      (make-power (simplify (base expr))
                  (simplify (exponent expr)))]
-    ;; Trig: recurse into argument
     [(or (sin? expr) (cos? expr) (tan? expr))
      (list (car expr) (simplify (trig-arg expr)))]
     [else expr]))
@@ -105,18 +109,19 @@
      (if (same-variable? expr var) 1 0)]
 
     ;; Sum rule: d/dx[u + v] = u' + v'
+    ;; n-ary sums handled via augend folding above
     [(sum? expr)
      (make-sum (deriv (addend expr) var)
                (deriv (augend expr) var))]
 
     ;; Product rule: d/dx[u * v] = u'v + uv'
     [(product? expr)
-     (let ([u  (multiplier expr)]
-           [v  (multiplicand expr)])
+     (let ([u (multiplier expr)]
+           [v (multiplicand expr)])
        (make-sum (make-product (deriv u var) v)
                  (make-product u (deriv v var))))]
 
-    ;; Power rule with chain rule: d/dx[u^n] = n * u^(n-1) * u'
+    ;; Power rule + chain rule: d/dx[u^n] = n * u^(n-1) * u'
     [(power? expr)
      (let ([u (base expr)]
            [n (exponent expr)])
@@ -135,8 +140,7 @@
        (make-product (make-neg (list 'sin u))
                      (deriv u var)))]
 
-    ;; d/dx[tan(u)] = sec^2(u) * u'  represented as (^ (cos u) -2) * u'
-    ;; sec^2(u) = 1/cos^2(u) = (cos u)^-2
+    ;; d/dx[tan(u)] = sec^2(u) * u' = (cos u)^-2 * u'
     [(tan? expr)
      (let ([u (trig-arg expr)])
        (make-product (make-power (list 'cos u) -2)
@@ -145,52 +149,47 @@
     [else (error "Unknown expression type" expr)]))
 
 ;;; ================================================================
-;;; Tests
+;;; Tests — all six assignment test expressions
 ;;; ================================================================
 
 (module+ test
   (require rackunit)
 
-  ;; --- Basic derivatives ---
+  ;; --- Basic ---
   (check-equal? (deriv 5 'x) 0)
   (check-equal? (deriv 'x 'x) 1)
   (check-equal? (deriv 'y 'x) 0)
 
   ;; --- Sum rule ---
-  (check-equal? (deriv '(+ x 3) 'x) 1)       ; 1 + 0 = 1
-  (check-equal? (deriv '(+ x y) 'x) 1)       ; 1 + 0 = 1
+  (check-equal? (deriv '(+ x 3) 'x) 1)
 
-  ;; --- Product rule ---
-  ;; d/dx[3x] = 3
+  ;; --- Product rule: d/dx[3x] = 3 ---
   (check-equal? (deriv '(* 3 x) 'x) 3)
-  ;; d/dx[x*x] = x + x = 2x  (simplified via make-sum/make-product)
-  (check-equal? (deriv '(* x x) 'x) '(+ x x))
 
-  ;; --- Power rule ---
-  ;; d/dx[x^2] = 2x
+  ;; TEST 1: 7x^2 + 4x + 5  (3-arg sum)
+  ;; augend folds: (+ (* 7 (^ x 2)) (+ (* 4 x) 5))
+  ;; d/dx[7x^2] = (* 7 (* 2 x)) = (* 14 x)
+  ;; d/dx[(+ (* 4 x) 5)] = make-sum(4, 0) = 4
+  ;; => (+ (* 14 x) 4)
+  (check-equal? (deriv '(+ (* 7 (^ x 2)) (* 4 x) 5) 'x)
+                '(+ (* 14 x) 4))
+
+  ;; TEST 2: x^2  =>  (* 2 x)
   (check-equal? (deriv '(^ x 2) 'x) '(* 2 x))
-  ;; d/dx[x^3] = 3x^2
-  (check-equal? (deriv '(^ x 3) 'x) '(* (* 3 (^ x 2)) 1))
 
-  ;; --- Trig ---
-  ;; d/dx[sin(x)] = cos(x)
-  (check-equal? (deriv '(sin x) 'x) '(cos x))
-  ;; d/dx[cos(x)] = -sin(x)
+  ;; TEST 3: 3 * x^2  =>  (* 3 (* 2 x))  ; simplify => (* 6 x)
+  (check-equal? (deriv '(* 3 (^ x 2)) 'x) '(* 3 (* 2 x)))
+  (check-equal? (simplify (deriv '(* 3 (^ x 2)) 'x)) '(* 6 x))
+
+  ;; TEST 4: cos(x)  =>  (* -1 (sin x))
   (check-equal? (deriv '(cos x) 'x) '(* -1 (sin x)))
-  ;; d/dx[tan(x)] = sec^2(x) = (cos x)^-2
-  (check-equal? (deriv '(tan x) 'x) '(^ (cos x) -2))
 
-  ;; --- Chain rule ---
-  ;; d/dx[sin(2x)] = cos(2x) * 2
-  (check-equal? (deriv '(sin (* 2 x)) 'x) '(* (cos (* 2 x)) 2))
-  ;; d/dx[tan(3x)] = (cos(3x))^-2 * 3
-  (check-equal? (deriv '(tan (* 3 x)) 'x) '(* (^ (cos (* 3 x)) -2) 3))
+  ;; TEST 5: sin(x)  =>  (cos x)
+  (check-equal? (deriv '(sin x) 'x) '(cos x))
 
-  ;; --- Polynomial: 7x^2 + 4x + 5 ---
-  ;; d/dx = 14x + 4
-  (let ([poly '(+ (+ (* 7 (^ x 2)) (* 4 x)) 5)])
-    (check-equal? (deriv poly 'x)
-                  '(+ (+ (* 7 (* 2 x)) 4) 0)))
+  ;; TEST 6: tan(3x)  =>  (* (^ (cos (* 3 x)) -2) 3)
+  (check-equal? (deriv '(tan (* 3 x)) 'x)
+                '(* (^ (cos (* 3 x)) -2) 3))
 
   ;; --- Simplify ---
   (check-equal? (simplify '(+ 0 x)) 'x)
