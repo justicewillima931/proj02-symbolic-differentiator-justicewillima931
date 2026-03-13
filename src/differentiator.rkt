@@ -1,111 +1,243 @@
 #lang racket
 (provide deriv simplify
+         ;; Expression predicates
          variable? same-variable? sum? product? power?
-         addend augend multiplier multiplicand
-         make-sum make-product)
+         ;; Selectors
+         addend augend multiplier multiplicand base exponent
+         ;; Constructors
+         make-sum make-product make-power)
 
-;;; ================================================================
-;;; 1. Expression Predicates
-;;; ================================================================
-
+;;; Expression predicates
 (define (variable? e) (symbol? e))
 (define (same-variable? v1 v2) (and (variable? v1) (variable? v2) (eq? v1 v2)))
-(define (sum? e)     (and (pair? e) (eq? (car e) '+)))
+(define (sum? e) (and (pair? e) (eq? (car e) '+)))
 (define (product? e) (and (pair? e) (eq? (car e) '*)))
-(define (power? e)   (and (pair? e) (or (eq? (car e) '**) (eq? (car e) '^))))
+(define (power? e) (and (pair? e) (eq? (car e) '**)))
+(define (trig? e) (and (pair? e) (memq (car e) '(sin cos tan))))
 
-;; Variant Specific Trig Predicates 
-(define (sin? e)     [cite_start](and (pair? e) (eq? (car e) 'sin))) [cite: 1]
-(define (cos? e)     [cite_start](and (pair? e) (eq? (car e) 'cos))) [cite: 1]
-(define (tan? e)     [cite_start](and (pair? e) (eq? (car e) 'tan))) [cite: 1]
-
-;;; ================================================================
-;;; 2. Selectors
-;;; ================================================================
-
-(define (addend e)       (cadr e))
-(define (augend e)       (caddr e))
-(define (multiplier e)   (cadr e))
+;;; Selectors
+(define (addend e) (cadr e))
+(define (augend e) (caddr e))
+(define (multiplier e) (cadr e))
 (define (multiplicand e) (caddr e))
-(define (base e)         (cadr e))
-(define (exponent e)     (caddr e))
-(define (trig-arg e)     [cite_start](cadr e)) [cite: 1]
+(define (base e) (cadr e))
+(define (exponent e) (caddr e))
 
-;;; ================================================================
-;;; 3. Smart Constructors (Milestone 3 Simplification) 
-;;; ================================================================
-
+;;; Constructors with simplification
 (define (make-sum a1 a2)
-  (cond [(and (number? a1) [cite_start](number? a2)) (+ a1 a2)][cite: 1]; Constant folding 
-        [cite_start][(equal? a1 0) a2][cite: 1]; 0 + x = x 
-        [cite_start][(equal? a2 0) a1] [cite: 1]                      [cite_start]; x + 0 = x 
-        [else (list '+ a1 a2)]))
+  (cond
+    [(and (number? a1) (number? a2)) (+ a1 a2)]
+    [(and (number? a1) (= a1 0)) a2]
+    [(and (number? a2) (= a2 0)) a1]
+    [(and (number? a1) (number? a2)) (+ a1 a2)]
+    [(and (sum? a1) (sum? a2))
+     ; Flatten nested sums
+     (list '+ (cadr a1) (caddr a1) (cadr a2) (caddr a2))]
+    [(sum? a1)
+     ; Check if a2 can be combined with last term of a1
+     (let loop ((terms (cdr a1)) (acc '()))
+       (if (null? (cdr terms))
+           (append (reverse (cons a2 acc)) '())
+           (loop (cdr terms) (cons (car terms) acc))))]
+    [else (list '+ a1 a2)]))
 
 (define (make-product m1 m2)
-  (cond [(and (number? m1) [cite_start](number? m2)) (* m1 m2)][cite: 1]; Constant folding 
-        [cite_start][(or (equal? m1 0) (equal? m2 0)) 0][cite: 1]; 0 * x = 0 
-        [cite_start][(equal? m1 1) m2][cite: 1]; 1 * x = x 
-        [cite_start][(equal? m2 1) m1] [cite: 1]                      [cite_start]; x * 1 = x 
-        [else (list '* m1 m2)]))
+  (cond
+    [(and (number? m1) (number? m2)) (* m1 m2)]
+    [(or (and (number? m1) (= m1 0)) (and (number? m2) (= m2 0))) 0]
+    [(and (number? m1) (= m1 1)) m2]
+    [(and (number? m2) (= m2 1)) m1]
+    [(and (number? m1) (number? m2)) (* m1 m2)]
+    [(and (product? m1) (product? m2))
+     ; Flatten nested products
+     (list '* (cadr m1) (caddr m1) (cadr m2) (caddr m2))]
+    [else (list '* m1 m2)]))
 
-(define (make-power b e)
-  (cond [(equal? e 0) 1]                        ; x^0 = 1
-        [(equal? e 1) b]                        ; x^1 = x
-        [(and (number? b) (number? e)) (expt b e)]
-        [else (list '^ b e)]))
+(define (make-power base exp)
+  (cond
+    [(and (number? exp) (= exp 0)) 1]
+    [(and (number? exp) (= exp 1)) base]
+    [(and (number? base) (number? exp)) (expt base exp)]
+    [else (list '** base exp)]))
 
-;;; ================================================================
-;;; 4. Main Differentiation Function 
-;;; ================================================================
+;;; Helper function to check if expression contains variable
+(define (contains-variable? expr var)
+  (cond
+    [(number? expr) #f]
+    [(variable? expr) (same-variable? expr var)]
+    [(pair? expr) (or (contains-variable? (cadr expr) var)
+                      (and (caddr expr) (contains-variable? (caddr expr) var)))]
+    [else #f]))
 
+;;; Main differentiation function
 (define (deriv expr var)
   (cond
-    [cite_start][(number? expr) 0] [cite: 1]
-    [cite_start][(variable? expr) (if (same-variable? expr var) 1 0)] [cite: 1]
-    
-    ;; Sum Rule: d/dx[u + v] = du/dx + dv/dx 
+    [(number? expr) 0]
+    [(variable? expr) (if (same-variable? expr var) 1 0)]
     [(sum? expr) 
      (make-sum (deriv (addend expr) var)
                (deriv (augend expr) var))]
-    
-    ;; Product Rule: d/dx[u * v] = u'v + uv' 
     [(product? expr)
-     (make-sum (make-product (deriv (multiplier expr) var)
-                            (multiplicand expr))
-               (make-product (multiplier expr)
-                            (deriv (multiplicand expr) var)))]
-    
-    ;; Power Rule: d/dx[u^n] = n * u^(n-1) * u' 
+     (let ((u (multiplier expr))
+           (v (multiplicand expr)))
+       (make-sum
+        (make-product (deriv u var) v)
+        (make-product u (deriv v var))))]
     [(power? expr)
-     (let ([u (base expr)]
-           [n (exponent expr)])
-       (make-product (make-product n (make-power u (make-sum n -1)))
-                     (deriv u var)))]
-    
-    ;; Variant Trig Rules 
-    [cite_start][(sin? expr) ; d/dx[sin(u)] = cos(u) * u' 
-     (make-product (list 'cos (trig-arg expr))
-                   (deriv (trig-arg expr) var))]
-                   
-    [cite_start][(cos? expr) ; d/dx[cos(u)] = -sin(u) * u' 
-     (make-product (make-product -1 (list 'sin (trig-arg expr)))
-                   (deriv (trig-arg expr) var))]
-                   
-    [cite_start][(tan? expr) ; d/dx[tan(u)] = sec^2(u) * u' 
-     (make-product (make-power (list 'sec (trig-arg expr)) 2)
-                   (deriv (trig-arg expr) var))]
-                   
+     (let ((u (base expr))
+           (n (exponent expr)))
+       (if (number? n)
+           (make-product
+            n
+            (make-product
+             (deriv u var)
+             (make-power u (- n 1))))
+           (error "Power rule requires numeric exponent")))]
+    [(trig? expr)
+     (let ((u (cadr expr))
+           (du (deriv u var)))
+       (if (contains-variable? u var)
+           (case (car expr)
+             [(sin) (make-product (make-trig 'cos u) du)]
+             [(cos) (make-product (make-product -1 (make-trig 'sin u)) du)]
+             [(tan) (make-product (make-power (make-trig 'sec u) 2) du)]
+             [else (error "Unknown trig function" (car expr))])
+           ; If argument doesn't contain variable, derivative is 0
+           0))]
     [else (error "Unknown expression type" expr)]))
 
-;;; ================================================================
-;;; 5. Global Simplification Pass 
-;;; ================================================================
+;;; Helper to create trig function expressions
+(define (make-trig func arg)
+  (list func arg))
 
+;;; Simplification
 (define (simplify expr)
-  (cond [(number? expr) [cite_start]expr] [cite: 1]
-        [cite_start][(variable? expr) expr] [cite: 1]
-        [cite_start][(sum? expr) (make-sum (simplify (addend expr)) (simplify (augend expr)))] [cite: 1]
-        [cite_start][(product? expr) (make-product (simplify (multiplier expr)) (simplify (multiplicand expr)))] [cite: 1]
-        [cite_start][(power? expr) (make-power (simplify (base expr)) (simplify (exponent expr)))] [cite: 1]
-        [cite_start][(pair? expr) (cons (car expr) (map simplify (cdr expr)))] [cite: 1]
-        [else expr]))
+  (cond
+    [(number? expr) expr]
+    [(variable? expr) expr]
+    [(sum? expr)
+     (let ((simple-addend (simplify (addend expr)))
+           (simple-augend (simplify (augend expr))))
+       (cond
+         [(and (number? simple-addend) (= simple-addend 0)) simple-augend]
+         [(and (number? simple-augend) (= simple-augend 0)) simple-addend]
+         [(and (number? simple-addend) (number? simple-augend)) 
+          (+ simple-addend simple-augend)]
+         [(and (number? simple-addend) (sum? simple-augend))
+          ; Distribute constant over sum: c + (a + b) -> (c + a) + b
+          (make-sum (make-sum simple-addend (addend simple-augend))
+                   (augend simple-augend))]
+         [else (make-sum simple-addend simple-augend)]))]
+    [(product? expr)
+     (let ((simple-multiplier (simplify (multiplier expr)))
+           (simple-multiplicand (simplify (multiplicand expr))))
+       (cond
+         [(or (and (number? simple-multiplier) (= simple-multiplier 0))
+              (and (number? simple-multiplicand) (= simple-multiplicand 0))) 0]
+         [(and (number? simple-multiplier) (= simple-multiplier 1)) 
+          simple-multiplicand]
+         [(and (number? simple-multiplicand) (= simple-multiplicand 1)) 
+          simple-multiplier]
+         [(and (number? simple-multiplier) (number? simple-multiplicand))
+          (* simple-multiplier simple-multiplicand)]
+         [(and (number? simple-multiplier) (product? simple-multiplicand))
+          ; Distribute constant over product: c * (a * b) -> (c * a) * b
+          (make-product (make-product simple-multiplier (multiplier simple-multiplicand))
+                       (multiplicand simple-multiplicand))]
+         [else (make-product simple-multiplier simple-multiplicand)]))]
+    [(power? expr)
+     (let ((simple-base (simplify (base expr)))
+           (simple-exp (simplify (exponent expr))))
+       (cond
+         [(and (number? simple-exp) (= simple-exp 0)) 1]
+         [(and (number? simple-exp) (= simple-exp 1)) simple-base]
+         [(and (number? simple-base) (number? simple-exp)) 
+          (expt simple-base simple-exp)]
+         [else (make-power simple-base simple-exp)]))]
+    [(trig? expr)
+     (let ((simple-arg (simplify (cadr expr))))
+       (list (car expr) simple-arg))]
+    [else expr]))
+
+;;; Additional simplification rules for derived expressions
+(define (simplify-derivative expr)
+  (let ((simplified (simplify expr)))
+    ; Additional rules for common derivative patterns
+    (cond
+      [(and (product? simplified)
+            (number? (multiplier simplified))
+            (= (multiplier simplified) 1))
+       (multiplicand simplified)]
+      [(and (sum? simplified)
+            (number? (addend simplified))
+            (= (addend simplified) 0))
+       (augend simplified)]
+      [(and (sum? simplified)
+            (number? (augend simplified))
+            (= (augend simplified) 0))
+       (addend simplified)]
+      [else simplified])))
+
+;;; Convenience function for getting simplified derivatives
+(define (deriv-simplified expr var)
+  (simplify-derivative (deriv expr var)))
+
+;;; Tests
+(module+ test
+  (require rackunit)
+  
+  ; Basic derivative tests
+  (check-equal? (deriv 5 'x) 0)
+  (check-equal? (deriv 'x 'x) 1)
+  (check-equal? (deriv 'y 'x) 0)
+  
+  ; Sum rule
+  (check-equal? (deriv '(+ x 3) 'x) '(+ 1 0))
+  (check-equal? (simplify (deriv '(+ x 3) 'x)) 1)
+  
+  ; Product rule
+  (check-equal? (deriv '(* x x) 'x) '(+ (* 1 x) (* x 1)))
+  (check-equal? (simplify (deriv '(* x x) 'x)) '(* 2 x))
+  
+  ; Power rule
+  (check-equal? (deriv '(** x 3) 'x) '(* 3 (* 1 (** x 2))))
+  (check-equal? (simplify (deriv '(** x 3) 'x)) '(* 3 (** x 2)))
+  
+  ; Trigonometric functions
+  (check-equal? (deriv '(sin x) 'x) '(* (cos x) 1))
+  (check-equal? (simplify (deriv '(sin x) 'x)) '(cos x))
+  
+  (check-equal? (deriv '(cos x) 'x) '(* (* -1 (sin x)) 1))
+  (check-equal? (simplify (deriv '(cos x) 'x)) '(* -1 (sin x)))
+  
+  (check-equal? (deriv '(tan x) 'x) '(* (** (sec x) 2) 1))
+  (check-equal? (simplify (deriv '(tan x) 'x)) '(** (sec x) 2))
+  
+  ; Chain rule with trig
+  (check-equal? (deriv '(sin (* 2 x)) 'x) '(* (cos (* 2 x)) (* 0 x (* 2 1))))
+  (check-equal? (simplify (deriv '(sin (* 2 x)) 'x)) '(* (cos (* 2 x)) 2))
+  
+  ; Test expressions from assignment
+  (check-equal? 
+   (simplify (deriv '(+ (* 7 (^ x 2)) (* 4 x) 5) 'x))
+   '(+ (* 7 (* 2 x)) 4))
+  
+  (check-equal? 
+   (simplify (deriv '(^ x 2) 'x))
+   '(* 2 x))
+  
+  (check-equal? 
+   (simplify (deriv '(* 3 (^ x 2)) 'x))
+   '(* 3 (* 2 x)))
+  
+  (check-equal? 
+   (simplify (deriv '(cos x) 'x))
+   '(* -1 (sin x)))
+  
+  (check-equal? 
+   (simplify (deriv '(sin x) 'x))
+   '(cos x))
+  
+  (check-equal? 
+   (simplify (deriv '(tan (* 3 x)) 'x))
+   '(* (** (sec (* 3 x)) 2) 3)))
