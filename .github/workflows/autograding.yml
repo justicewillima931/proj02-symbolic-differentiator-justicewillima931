@@ -1,0 +1,48 @@
+name: Autograding
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  grade:
+    name: Visible Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Racket
+      run: |
+        sudo add-apt-repository ppa:plt/racket -y
+        sudo apt-get update
+        sudo apt-get install -y racket
+
+    - name: Verify variant config exists
+      run: |
+        if [ ! -f .variant_config.json ]; then
+          echo "Warning: No variant config found. Using default test values."
+        else
+          echo "Variant config found:"
+          cat .variant_config.json
+        fi
+
+    - name: Run visible tests
+      run: |
+        echo "=== Running Visible Tests ==="
+        raco test tests/visible/
+
+    - name: Run source tests
+      run: |
+        echo "=== Running Source Module Tests ==="
+        raco test src/
+
+    - name: Display results
+      if: always()
+      run: |
+        echo "=== Visible Test Results ==="
+        echo "(Hidden tests will be run after the deadline)"
